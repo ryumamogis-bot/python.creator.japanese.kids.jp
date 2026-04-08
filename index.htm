@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>VSCode風 Pythonエディタ</title>
+<script src="https://unpkg.com/monaco-editor@0.44.0/min/vs/loader.js"></script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<style>
+body{margin:0;background:#1e1e1e;color:white;font-family:sans-serif}
+#topbar{padding:10px;background:#2d2d2d;display:flex;gap:10px}
+button{background:#007acc;border:none;padding:6px 15px;color:white;border-radius:5px;cursor:pointer}
+#container{display:flex;height:calc(100vh - 50px)}
+#sidebar{width:250px;background:#252526;padding:10px;overflow:auto}
+#editor{height:70%}
+#main{flex:1;display:flex;flex-direction:column}
+#output{height:30%;background:#111;color:#0f0;padding:10px;overflow:auto;font-family:monospace;white-space:pre-wrap}
+.file{padding:5px;cursor:pointer}
+.file:hover{background:#333}
+.active{background:#444}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+<button onclick="openFolder()">📂 フォルダ</button>
+<button onclick="createFile()">📄 新規</button>
+<button onclick="saveCurrentFile()">💾 保存</button>
+<button onclick="runPython()">▶ 実行</button>
+</div>
+
+<div id="container">
+<div id="sidebar"><div id="fileList"></div></div>
+<div id="main">
+<div id="editor"></div>
+<div id="output">準備中...</div>
+</div>
+</div>
+
+<script>
+let editor;
+let pyodide;
+let currentFileHandle=null;
+let directoryHandle=null;
+
+require.config({paths:{vs:'https://unpkg.com/monaco-editor@0.44.0/min/vs'}});
+require(["vs/editor/editor.main"],function(){
+editor=monaco.editor.create(document.getElementById("editor"),{
+value:"",
+language:"python",
+theme:"vs-dark",
+fontSize:14
+});
+});
+
+async function initPython(){
+document.getElementById("output").textContent="Python読み込み中...";
+pyodide=await loadPyodide();
+document.getElementById("output").textContent="準備完了";
+}
+initPython();
+
+async function openFolder(){
+directoryHandle=await window.showDirectoryPicker();
+renderFolder();
+}
+
+async function renderFolder(){
+const list=document.getElementById("fileList");
+list.innerHTML="";
+for await (const entry of directoryHandle.values()){
+if(entry.kind==="file"){
+const div=document.createElement("div");
+div.textContent=entry.name;
+div.className="file";
+div.onclick=()=>openFile(entry,div);
+list.appendChild(div);
+}
+}
+}
+
+async function openFile(fileHandle,el){
+currentFileHandle=fileHandle;
+const file=await fileHandle.getFile();
+const text=await file.text();
+editor.setValue(text);
+document.querySelectorAll(".file").forEach(e=>e.classList.remove("active"));
+el.classList.add("active");
+}
+
+async function createFile(){
+if(!directoryHandle){
+alert("フォルダを開いてください");
+return;
+}
+const name=prompt("ファイル名（例: test.py）");
+if(!name)return;
+const fileHandle=await directoryHandle.getFileHandle(name,{create:true});
+currentFileHandle=fileHandle;
+const writable=await fileHandle.createWritable();
+await writable.write("");
+await writable.close();
+renderFolder();
+editor.setValue("");
+}
+
+async function saveCurrentFile(){
+if(!currentFileHandle)return;
+const writable=await currentFileHandle.createWritable();
+await writable.write(editor.getValue());
+await writable.close();
+}
+
+async function runPython(){
+const code=editor.getValue();
+const out=document.getElementById("output");
+out.textContent="実行中...";
+try{
+let captured=[];
+pyodide.globals.set("_captured",captured);
+pyodide.runPython(`
+import sys, io
+class Cap(io.StringIO):
+    def write(self,s):
+        _captured.append(s)
+        return len(s)
+sys.stdout=Cap()
+sys.stderr=Cap()
+`);
+pyodide.runPython(code);
+const result=pyodide.globals.get("_captured");
+out.textContent=Array.from(result).join("")||"(出力なし)";
+}catch(e){
+out.textContent=e;
+}
+}
+</script>
+
+</body>
+</html>
